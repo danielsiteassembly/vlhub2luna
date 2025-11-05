@@ -1025,100 +1025,36 @@ function luna_profile_cache_bust($all=false){
   }
 }
 
-if (!function_exists('luna_widget_normalize_hub_payload')) {
-  function luna_widget_normalize_hub_payload($payload) {
-    if (!is_array($payload)) {
-      return $payload;
-    }
-
-    $max_depth = 6;
-    $seen = array();
-
-    while ($max_depth-- > 0 && is_array($payload)) {
-      $hash = md5(serialize(array_keys($payload)));
-      if (isset($seen[$hash])) {
-        break;
-      }
-      $seen[$hash] = true;
-
-      if (isset($payload['error']) && !empty($payload['error'])) {
-        break;
-      }
-
-      if (isset($payload['data']) && is_array($payload['data'])) {
-        $payload = $payload['data'];
-        continue;
-      }
-
-      if (isset($payload['payload']) && is_array($payload['payload'])) {
-        $payload = $payload['payload'];
-        continue;
-      }
-
-      if (isset($payload['profile']) && is_array($payload['profile'])) {
-        $payload = $payload['profile'];
-        continue;
-      }
-
-      if (isset($payload['report']) && is_array($payload['report'])) {
-        $payload = $payload['report'];
-        continue;
-      }
-
-      if (isset($payload['result']) && is_array($payload['result'])) {
-        $payload = $payload['result'];
-        continue;
-      }
-
-      if (isset($payload['results']) && is_array($payload['results'])) {
-        if (count($payload['results']) === 1 && is_array($payload['results'][0])) {
-          $payload = $payload['results'][0];
-          continue;
-        }
-        break;
-      }
-
-      if (isset($payload['response']) && is_array($payload['response'])) {
-        $payload = $payload['response'];
-        continue;
-      }
-
-      if (isset($payload['items']) && is_array($payload['items']) && !isset($payload[0])) {
-        $payload = $payload['items'];
-        continue;
-      }
-
-      if (isset($payload['success']) && $payload['success'] === true) {
-        $candidates = array('value', 'data', 'payload', 'report');
-        foreach ($candidates as $candidate) {
-          if (isset($payload[$candidate]) && is_array($payload[$candidate])) {
-            $payload = $payload[$candidate];
-            continue 2;
-          }
-        }
-      }
-
-      if (isset($payload['ok']) && $payload['ok'] === true) {
-        $candidates = array('data', 'payload', 'value');
-        foreach ($candidates as $candidate) {
-          if (isset($payload[$candidate]) && is_array($payload[$candidate])) {
-            $payload = $payload[$candidate];
-            continue 2;
-          }
-        }
-      }
-
-      break;
-    }
-
+function luna_hub_normalize_payload($payload) {
+  if (!is_array($payload)) {
     return $payload;
   }
+
+  if (isset($payload['data']) && is_array($payload['data'])) {
+    $payload = $payload['data'];
+  } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
+    $payload = $payload['profile'];
+  } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
+    $payload = $payload['payload'];
+  }
+
+  return $payload;
 }
 
-if (!function_exists('luna_hub_normalize_payload')) {
-  function luna_hub_normalize_payload($payload) {
-    return luna_widget_normalize_hub_payload($payload);
+function luna_hub_normalize_payload($payload) {
+  if (!is_array($payload)) {
+    return $payload;
   }
+
+  if (isset($payload['data']) && is_array($payload['data'])) {
+    $payload = $payload['data'];
+  } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
+    $payload = $payload['profile'];
+  } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
+    $payload = $payload['payload'];
+  }
+
+  return $payload;
 }
 
 function luna_hub_get_json($path) {
@@ -1146,7 +1082,11 @@ function luna_hub_get_json($path) {
   $code = (int) wp_remote_retrieve_response_code($resp);
   if ($code >= 400) return null;
   $body = json_decode(wp_remote_retrieve_body($resp), true);
-  return is_array($body) ? $body : null;
+  if (!is_array($body)) {
+    return null;
+  }
+
+  return luna_hub_normalize_payload($body);
 }
 
 function luna_hub_profile() {
@@ -1158,7 +1098,7 @@ function luna_hub_profile() {
   $map = isset($GLOBALS['LUNA_HUB_ENDPOINTS']) ? $GLOBALS['LUNA_HUB_ENDPOINTS'] : array();
   $profile = luna_hub_get_json(isset($map['profile']) ? $map['profile'] : '/wp-json/vl-hub/v1/profile');
   if (is_array($profile)) {
-    $profile = luna_widget_normalize_hub_payload($profile);
+    $profile = luna_hub_normalize_payload($profile);
   }
 
   if (!$profile) {
@@ -1190,7 +1130,7 @@ function luna_hub_fetch_first_json($paths) {
   foreach ($paths as $path) {
     $payload = luna_hub_get_json($path);
     if (is_array($payload)) {
-      $normalized = luna_widget_normalize_hub_payload($payload);
+      $normalized = luna_hub_normalize_payload($payload);
       if (is_array($normalized) && !empty($normalized)) {
         return $normalized;
       }
@@ -1198,33 +1138,6 @@ function luna_hub_fetch_first_json($paths) {
   }
 
   return null;
-}
-
-function luna_widget_hub_collection_endpoints() {
-  $defaults = array(
-    'profile'        => array('/wp-json/vl-hub/v1/profile', '/wp-json/luna_widget/v1/system/comprehensive'),
-    'connections'    => array('/wp-json/vl-hub/v1/connections', '/wp-json/vl-hub/v1/all-connections', '/wp-json/vl-hub/v1/data-sources'),
-    'cloudops'       => array('/wp-json/vl-hub/v1/cloudops', '/wp-json/vl-hub/v1/cloud-ops', '/wp-json/vl-hub/v1/cloudops/providers'),
-    'content'        => array('/wp-json/vl-hub/v1/content'),
-    'search'         => array('/wp-json/vl-hub/v1/search', '/wp-json/vl-hub/v1/search-console'),
-    'analytics'      => array('/wp-json/vl-hub/v1/analytics', '/wp-json/vl-hub/v1/ga4', '/wp-json/vl-hub/v1/analytics/ga4'),
-    'marketing'      => array('/wp-json/vl-hub/v1/marketing'),
-    'ecommerce'      => array('/wp-json/vl-hub/v1/ecommerce', '/wp-json/vl-hub/v1/e-commerce'),
-    'security'       => array('/wp-json/vl-hub/v1/security', '/wp-json/vl-hub/v1/security/tls-status'),
-    'web_infra'      => array('/wp-json/vl-hub/v1/web-infra', '/wp-json/vl-hub/v1/web-infrastructure', '/wp-json/vl-hub/v1/infra'),
-    'identity'       => array('/wp-json/vl-hub/v1/identity'),
-    'competitive'    => array('/wp-json/vl-hub/v1/competitive', '/wp-json/vl-hub/v1/competition', '/wp-json/vl-hub/v1/competitors', '/wp-json/vl-hub/v1/reports/competitive'),
-    'users'          => array('/wp-json/vl-hub/v1/users'),
-    'plugins'        => array('/wp-json/vl-hub/v1/plugins'),
-    'themes'         => array('/wp-json/vl-hub/v1/themes'),
-    'updates'        => array('/wp-json/vl-hub/v1/updates'),
-    'cloud_accounts' => array('/wp-json/vl-hub/v1/cloud-accounts'),
-    'data_streams'   => array('/wp-json/vl-hub/v1/data-streams', '/wp-json/vl-hub/v1/streams'),
-    'insights'       => array('/wp-json/vl-hub/v1/insights', '/wp-json/vl-hub/v1/lighthouse'),
-    'keywords'       => array('/wp-json/vl-hub/v1/keywords'),
-  );
-
-  return apply_filters('luna_widget_hub_collection_endpoints', $defaults);
 }
 
 function luna_hub_collect_collections($force_refresh = false, $prefetched = array()) {
@@ -1258,7 +1171,24 @@ function luna_hub_collect_collections($force_refresh = false, $prefetched = arra
     }
   }
 
-  $categories = luna_widget_hub_collection_endpoints();
+  $categories = array(
+    'profile'      => array('/wp-json/vl-hub/v1/profile', '/wp-json/luna_widget/v1/system/comprehensive'),
+    'connections'  => array('/wp-json/vl-hub/v1/connections', '/wp-json/vl-hub/v1/all-connections', '/wp-json/vl-hub/v1/data-sources'),
+    'cloudops'     => array('/wp-json/vl-hub/v1/cloudops', '/wp-json/vl-hub/v1/cloud-ops'),
+    'content'      => array('/wp-json/vl-hub/v1/content'),
+    'search'       => array('/wp-json/vl-hub/v1/search', '/wp-json/vl-hub/v1/search-console'),
+    'analytics'    => array('/wp-json/vl-hub/v1/analytics', '/wp-json/vl-hub/v1/ga4'),
+    'marketing'    => array('/wp-json/vl-hub/v1/marketing'),
+    'ecommerce'    => array('/wp-json/vl-hub/v1/ecommerce', '/wp-json/vl-hub/v1/e-commerce'),
+    'security'     => array('/wp-json/vl-hub/v1/security'),
+    'web_infra'    => array('/wp-json/vl-hub/v1/web-infra', '/wp-json/vl-hub/v1/web-infrastructure', '/wp-json/vl-hub/v1/infra'),
+    'identity'     => array('/wp-json/vl-hub/v1/identity'),
+    'competitive'  => array('/wp-json/vl-hub/v1/competitive', '/wp-json/vl-hub/v1/competition', '/wp-json/vl-hub/v1/competitors'),
+    'users'        => array('/wp-json/vl-hub/v1/users'),
+    'plugins'      => array('/wp-json/vl-hub/v1/plugins'),
+    'themes'       => array('/wp-json/vl-hub/v1/themes'),
+    'updates'      => array('/wp-json/vl-hub/v1/updates'),
+  );
 
   $collections = array();
 
@@ -1280,11 +1210,9 @@ function luna_hub_collect_collections($force_refresh = false, $prefetched = arra
     }
   }
 
-  if (!isset($collections['data_streams'])) {
-    $streams = luna_fetch_hub_data_streams($license);
-    if (is_array($streams) && !empty($streams)) {
-      $collections['data_streams'] = $streams;
-    }
+  $streams = luna_fetch_hub_data_streams($license);
+  if (is_array($streams) && !empty($streams)) {
+    $collections['data_streams'] = $streams;
   }
 
   $collections['_meta'] = array(
@@ -1556,9 +1484,10 @@ function luna_profile_facts_comprehensive() {
   if (isset($hub_collections['profile']) && is_array($hub_collections['profile'])) {
     $comprehensive = luna_widget_normalize_hub_payload($hub_collections['profile']);
   }
-
-  if (empty($comprehensive)) {
-    $comprehensive = luna_hub_profile();
+  
+  $comprehensive = json_decode(wp_remote_retrieve_body($response), true);
+  if (is_array($comprehensive)) {
+    $comprehensive = luna_hub_normalize_payload($comprehensive);
   }
 
   if (!is_array($comprehensive)) {
@@ -1568,7 +1497,9 @@ function luna_profile_facts_comprehensive() {
     return $fallback;
   }
 
-  error_log('[Luna] Successfully assembled comprehensive data set for license ' . substr($license, 0, 8) . '...');
+  $hub_collections = luna_hub_collect_collections(false, array('profile' => $comprehensive));
+
+  error_log('[Luna] Successfully fetched comprehensive data: ' . print_r($comprehensive, true));
 
   // Build enhanced facts from comprehensive data with local fallbacks
   $local_snapshot = luna_snapshot_system();
@@ -1763,26 +1694,23 @@ function luna_profile_facts_comprehensive() {
     $facts['hub_collections'] = $hub_collections;
 
     $collection_map = array(
-      'profile'        => 'hub_profile',
-      'connections'    => 'hub_connections',
-      'cloudops'       => 'hub_cloudops',
-      'cloud_accounts' => 'hub_cloud_accounts',
-      'content'        => 'hub_content',
-      'search'         => 'hub_search',
-      'analytics'      => 'hub_analytics',
-      'marketing'      => 'hub_marketing',
-      'ecommerce'      => 'hub_ecommerce',
-      'security'       => 'hub_security',
-      'web_infra'      => 'hub_web_infra',
-      'identity'       => 'hub_identity',
-      'competitive'    => 'hub_competitive',
-      'data_streams'   => 'hub_data_streams',
-      'insights'       => 'hub_insights',
-      'keywords'       => 'hub_keywords',
-      'users'          => 'hub_users',
-      'plugins'        => 'hub_plugins',
-      'themes'         => 'hub_themes',
-      'updates'        => 'hub_updates',
+      'profile'      => 'hub_profile',
+      'connections'  => 'hub_connections',
+      'cloudops'     => 'hub_cloudops',
+      'content'      => 'hub_content',
+      'search'       => 'hub_search',
+      'analytics'    => 'hub_analytics',
+      'marketing'    => 'hub_marketing',
+      'ecommerce'    => 'hub_ecommerce',
+      'security'     => 'hub_security',
+      'web_infra'    => 'hub_web_infra',
+      'identity'     => 'hub_identity',
+      'competitive'  => 'hub_competitive',
+      'data_streams' => 'hub_data_streams',
+      'users'        => 'hub_users',
+      'plugins'      => 'hub_plugins',
+      'themes'       => 'hub_themes',
+      'updates'      => 'hub_updates',
     );
 
     foreach ($collection_map as $source_key => $dest_key) {
@@ -4795,7 +4723,7 @@ function luna_fetch_competitor_data($license = null) {
       $body = wp_remote_retrieve_body($response);
       $profile = json_decode($body, true);
       if (is_array($profile)) {
-        $profile = luna_widget_normalize_hub_payload($profile);
+        $profile = luna_hub_normalize_payload($profile);
       } else {
         $profile = null;
       }
