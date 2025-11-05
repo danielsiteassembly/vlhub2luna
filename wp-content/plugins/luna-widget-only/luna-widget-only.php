@@ -9,6 +9,11 @@
 
 if (!defined('ABSPATH')) exit;
 
+if (defined('LUNA_WIDGET_ONLY_BOOTSTRAPPED')) {
+  return;
+}
+define('LUNA_WIDGET_ONLY_BOOTSTRAPPED', true);
+
 /* ============================================================
  * CONSTANTS & OPTIONS
  * ============================================================ */
@@ -1466,34 +1471,18 @@ function luna_profile_facts_comprehensive() {
     $fallback['__source'] = 'fallback-basic';
     return $fallback;
   }
-  
-  // Try to fetch comprehensive data from VL Hub profile
-  $hub_url = luna_widget_hub_base();
-  $endpoint = $hub_url . '/wp-json/vl-hub/v1/profile';
-  
-  error_log('[Luna] Fetching comprehensive data from: ' . $endpoint);
-  error_log('[Luna] Using license: ' . substr($license, 0, 8) . '...');
-  
-  $response = wp_remote_get($endpoint . '?license=' . urlencode($license), array(
-    'headers' => array('X-Luna-License' => $license),
-    'timeout' => 10
-  ));
-  
-  if (is_wp_error($response)) {
-    error_log('[Luna] Error fetching comprehensive data: ' . $response->get_error_message());
+
+  $hub_collections = luna_hub_collect_collections(false);
+  if (empty($hub_collections)) {
+    error_log('[Luna] Hub collections were empty, falling back to basic facts');
     $fallback = luna_profile_facts();
     $fallback['__source'] = 'fallback-basic';
-    return $fallback; // fallback
+    return $fallback;
   }
-  
-  $code = wp_remote_retrieve_response_code($response);
-  error_log('[Luna] Response code: ' . $code);
-  
-  if ($code < 200 || $code >= 300) {
-    error_log('[Luna] HTTP error, falling back to basic facts');
-    $fallback = luna_profile_facts();
-    $fallback['__source'] = 'fallback-basic';
-    return $fallback; // fallback
+
+  $comprehensive = array();
+  if (isset($hub_collections['profile']) && is_array($hub_collections['profile'])) {
+    $comprehensive = luna_widget_normalize_hub_payload($hub_collections['profile']);
   }
   
   $comprehensive = json_decode(wp_remote_retrieve_body($response), true);
@@ -1502,10 +1491,10 @@ function luna_profile_facts_comprehensive() {
   }
 
   if (!is_array($comprehensive)) {
-    error_log('[Luna] Invalid JSON response, falling back to basic facts');
+    error_log('[Luna] Could not locate a normalized Hub profile payload, falling back to basic facts');
     $fallback = luna_profile_facts();
     $fallback['__source'] = 'fallback-basic';
-    return $fallback; // fallback
+    return $fallback;
   }
 
   $hub_collections = luna_hub_collect_collections(false, array('profile' => $comprehensive));
@@ -1662,30 +1651,6 @@ function luna_profile_facts_comprehensive() {
     'pages' => isset($comprehensive['_pages']['items']) ? $comprehensive['_pages']['items'] : array(),
     'security' => isset($comprehensive['security']) ? $comprehensive['security'] : array(), // Add security data
   );
-  
-  $ga4_info = null;
-  if (isset($comprehensive['ga4_metrics']) && is_array($comprehensive['ga4_metrics'])) {
-    $ga4_info = array(
-      'metrics'        => $comprehensive['ga4_metrics'],
-      'last_synced'    => isset($comprehensive['ga4_last_synced']) ? $comprehensive['ga4_last_synced'] : (isset($comprehensive['last_synced']) ? $comprehensive['last_synced'] : null),
-      'date_range'     => isset($comprehensive['ga4_date_range']) ? $comprehensive['ga4_date_range'] : null,
-      'source_url'     => isset($comprehensive['ga4_source_url']) ? $comprehensive['ga4_source_url'] : (isset($comprehensive['source_url']) ? $comprehensive['source_url'] : null),
-      'property_id'    => isset($comprehensive['ga4_property_id']) ? $comprehensive['ga4_property_id'] : null,
-      'measurement_id' => isset($comprehensive['ga4_measurement_id']) ? $comprehensive['ga4_measurement_id'] : null,
-    );
-    error_log('[Luna] GA4 metrics present in comprehensive payload.');
-  } else {
-    error_log('[Luna] No GA4 metrics in comprehensive payload, attempting data streams fetch.');
-    $ga4_info = luna_fetch_ga4_metrics_from_hub($license);
-  }
-
-  if ($ga4_info && isset($ga4_info['metrics'])) {
-    $facts['ga4_metrics'] = $ga4_info['metrics'];
-    if (!empty($ga4_info['last_synced'])) {
-      $facts['ga4_last_synced'] = $ga4_info['last_synced'];
-    }
-    $facts['updates']['plugins'] = $plugin_updates;
-  }
   
   $ga4_info = null;
   if (isset($comprehensive['ga4_metrics']) && is_array($comprehensive['ga4_metrics'])) {
@@ -4581,6 +4546,11 @@ function luna_fetch_hub_data_streams($license = null) {
   $body = json_decode(wp_remote_retrieve_body($response), true);
   if (!is_array($body)) {
     error_log('[Luna] Hub data streams response was not valid JSON.');
+    return null;
+  }
+
+  $body = luna_widget_normalize_hub_payload($body);
+  if (!is_array($body)) {
     return null;
   }
 
