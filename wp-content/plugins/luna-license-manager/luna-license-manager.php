@@ -1608,6 +1608,16 @@ final class VL_License_Manager {
             )
         );
         
+        register_rest_route(
+            'vl-hub/v1',
+            '/profile',
+            array(
+                'methods'             => 'GET',
+                'permission_callback' => '__return_true',
+                'callback'            => array($this, 'rest_profile'),
+            )
+        );
+        
         // VLDR REST endpoints
         register_rest_route(
             'vl-hub/v1',
@@ -2417,6 +2427,112 @@ final class VL_License_Manager {
                 'username' => $user->user_login
             ));
         }
+    }
+
+    /**
+     * REST handler: return comprehensive client profile data.
+     */
+    public function rest_profile($request) {
+        $this->add_cors_headers();
+        
+        $license_key = sanitize_text_field($request->get_param('license'));
+        
+        if (empty($license_key)) {
+            return rest_ensure_response(array(
+                'ok' => false,
+                'error' => 'License parameter is required'
+            ));
+        }
+        
+        // Verify license exists and is active
+        $license_record = self::lic_lookup_by_key($license_key);
+        if (!$license_record || (isset($license_record['status']) && $license_record['status'] !== 'active')) {
+            return rest_ensure_response(array(
+                'ok' => false,
+                'error' => 'Invalid or inactive license'
+            ));
+        }
+        
+        // Build comprehensive profile data
+        $profile = array(
+            'license_key' => $license_key,
+            'site_info' => array(
+                'client_name' => $license_record['client_name'] ?? '',
+                'site' => $license_record['site'] ?? '',
+                'status' => $license_record['status'] ?? 'inactive',
+                'contact_email' => $license_record['contact_email'] ?? '',
+                'created' => $license_record['created'] ?? '',
+                'last_seen' => $license_record['last_seen'] ?? null,
+            ),
+            'wordpress' => array(),
+            'security' => array(),
+            'content' => array(),
+            'users' => array(),
+            'plugins' => array(),
+            'themes' => array(),
+        );
+        
+        // Fetch WordPress data from client site if available
+        if (!empty($license_record['site'])) {
+            $wp_data = self::fetch_client_wp_data($license_key, 'wp-core-status');
+            if ($wp_data) {
+                $profile['wordpress'] = array(
+                    'version' => $wp_data['version'] ?? '',
+                    'php_version' => $wp_data['php_version'] ?? '',
+                    'mysql_version' => $wp_data['mysql_version'] ?? '',
+                    'memory_limit' => $wp_data['memory_limit'] ?? '',
+                    'is_multisite' => $wp_data['is_multisite'] ?? false,
+                    'update_available' => $wp_data['update_available'] ?? false,
+                );
+            }
+            
+            // Fetch content data
+            $posts_data = self::fetch_client_wp_data($license_key, 'content/posts');
+            $pages_data = self::fetch_client_wp_data($license_key, 'content/pages');
+            if ($posts_data || $pages_data) {
+                $profile['content'] = array(
+                    'posts' => $posts_data ? ($posts_data['items'] ?? array()) : array(),
+                    'pages' => $pages_data ? ($pages_data['items'] ?? array()) : array(),
+                    'total_posts' => $posts_data ? ($posts_data['total'] ?? 0) : 0,
+                    'total_pages' => $pages_data ? ($pages_data['total'] ?? 0) : 0,
+                );
+            }
+            
+            // Fetch users data
+            $users_data = self::fetch_client_wp_data($license_key, 'users');
+            if ($users_data) {
+                $profile['users'] = array(
+                    'items' => $users_data['items'] ?? array(),
+                    'total' => $users_data['total'] ?? 0,
+                );
+            }
+            
+            // Fetch plugins data
+            $plugins_data = self::fetch_client_wp_data($license_key, 'plugins');
+            if ($plugins_data) {
+                $profile['plugins'] = array(
+                    'items' => $plugins_data['items'] ?? array(),
+                    'total' => count($plugins_data['items'] ?? array()),
+                );
+            }
+            
+            // Fetch themes data
+            $themes_data = self::fetch_client_wp_data($license_key, 'themes');
+            if ($themes_data) {
+                $profile['themes'] = array(
+                    'items' => $themes_data['items'] ?? array(),
+                    'total' => count($themes_data['items'] ?? array()),
+                );
+            }
+        }
+        
+        // Apply filter to enrich profile data with competitor analysis, performance, SEO, security, and data streams
+        $profile = apply_filters('vl_hub_profile_resolved', $profile, $license_key);
+        
+        return rest_ensure_response(array(
+            'ok' => true,
+            'data' => $profile
+        ));
     }
 
     /**
