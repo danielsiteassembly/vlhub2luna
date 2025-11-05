@@ -1017,6 +1017,22 @@ function luna_profile_cache_bust($all=false){
   delete_transient( luna_profile_cache_key() );
 }
 
+function luna_hub_normalize_payload($payload) {
+  if (!is_array($payload)) {
+    return $payload;
+  }
+
+  if (isset($payload['data']) && is_array($payload['data'])) {
+    $payload = $payload['data'];
+  } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
+    $payload = $payload['profile'];
+  } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
+    $payload = $payload['payload'];
+  }
+
+  return $payload;
+}
+
 function luna_hub_get_json($path) {
   $license = luna_get_license();
   if ($license === '') return null;
@@ -1042,7 +1058,11 @@ function luna_hub_get_json($path) {
   $code = (int) wp_remote_retrieve_response_code($resp);
   if ($code >= 400) return null;
   $body = json_decode(wp_remote_retrieve_body($resp), true);
-  return is_array($body) ? $body : null;
+  if (!is_array($body)) {
+    return null;
+  }
+
+  return luna_hub_normalize_payload($body);
 }
 
 function luna_hub_profile() {
@@ -1345,6 +1365,10 @@ function luna_profile_facts_comprehensive() {
   }
   
   $comprehensive = json_decode(wp_remote_retrieve_body($response), true);
+  if (is_array($comprehensive)) {
+    $comprehensive = luna_hub_normalize_payload($comprehensive);
+  }
+
   if (!is_array($comprehensive)) {
     error_log('[Luna] Invalid JSON response, falling back to basic facts');
     $fallback = luna_profile_facts();
@@ -4554,15 +4578,20 @@ function luna_fetch_competitor_data($license = null) {
     'timeout' => 10,
     'headers' => array('X-Luna-License' => $license),
   ));
-  
+
   if (!is_wp_error($response)) {
     $code = wp_remote_retrieve_response_code($response);
     if ($code === 200) {
       $body = wp_remote_retrieve_body($response);
       $profile = json_decode($body, true);
-      
+      if (is_array($profile)) {
+        $profile = luna_hub_normalize_payload($profile);
+      } else {
+        $profile = null;
+      }
+
       // Extract competitor URLs from enriched profile
-      if (isset($profile['competitors']) && is_array($profile['competitors'])) {
+      if (is_array($profile) && isset($profile['competitors']) && is_array($profile['competitors'])) {
         foreach ($profile['competitors'] as $competitor) {
           if (!empty($competitor['url'])) {
             $competitor_urls[] = $competitor['url'];
@@ -4573,15 +4602,19 @@ function luna_fetch_competitor_data($license = null) {
       }
     }
   }
-  
+
+  if (!empty($competitor_urls)) {
+    $competitor_urls = array_values(array_unique(array_filter($competitor_urls)));
+  }
+
   // Fetch reports for each competitor
   $competitor_reports = array();
   foreach ($competitor_urls as $competitor_url) {
     $report_url = add_query_arg(array(
       'license' => $license,
-      'competitor_url' => rawurlencode($competitor_url),
+      'competitor_url' => $competitor_url,
     ), $url);
-    
+
     $report_response = wp_remote_get($report_url, array(
       'timeout' => 10,
       'headers' => array('X-Luna-License' => $license),
@@ -4593,13 +4626,33 @@ function luna_fetch_competitor_data($license = null) {
         $report_body = wp_remote_retrieve_body($report_response);
         $report_data = json_decode($report_body, true);
         
-        if (isset($report_data['ok']) && $report_data['ok'] && isset($report_data['data'])) {
-          $competitor_reports[] = array(
-            'url' => $competitor_url,
-            'domain' => parse_url($competitor_url, PHP_URL_HOST),
-            'report' => $report_data['data'],
-          );
+        if (!is_array($report_data)) {
+          continue;
         }
+
+        $report_payload = null;
+        if (isset($report_data['success']) && $report_data['success'] && isset($report_data['report']) && is_array($report_data['report'])) {
+          $report_payload = $report_data['report'];
+        } elseif (isset($report_data['ok']) && $report_data['ok'] && isset($report_data['data']) && is_array($report_data['data'])) {
+          $report_payload = $report_data['data'];
+        }
+
+        if ($report_payload === null) {
+          continue;
+        }
+
+        $domain = parse_url($competitor_url, PHP_URL_HOST);
+        if (!$domain) {
+          $domain = $competitor_url;
+        }
+
+        $competitor_reports[] = array(
+          'url' => $competitor_url,
+          'domain' => $domain,
+          'report' => $report_payload,
+          'last_scanned' => $report_data['last_scanned'] ?? null,
+          'status' => $report_data['status'] ?? null,
+        );
       }
     }
   }
