@@ -1020,28 +1020,36 @@ function luna_profile_cache_bust($all=false){
   }
 }
 
-if (!function_exists('luna_widget_normalize_hub_payload')) {
-  function luna_widget_normalize_hub_payload($payload) {
-    if (!is_array($payload)) {
-      return $payload;
-    }
-
-    if (isset($payload['data']) && is_array($payload['data'])) {
-      $payload = $payload['data'];
-    } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
-      $payload = $payload['profile'];
-    } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
-      $payload = $payload['payload'];
-    }
-
+function luna_hub_normalize_payload($payload) {
+  if (!is_array($payload)) {
     return $payload;
   }
+
+  if (isset($payload['data']) && is_array($payload['data'])) {
+    $payload = $payload['data'];
+  } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
+    $payload = $payload['profile'];
+  } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
+    $payload = $payload['payload'];
+  }
+
+  return $payload;
 }
 
-if (!function_exists('luna_hub_normalize_payload')) {
-  function luna_hub_normalize_payload($payload) {
-    return luna_widget_normalize_hub_payload($payload);
+function luna_hub_normalize_payload($payload) {
+  if (!is_array($payload)) {
+    return $payload;
   }
+
+  if (isset($payload['data']) && is_array($payload['data'])) {
+    $payload = $payload['data'];
+  } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
+    $payload = $payload['profile'];
+  } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
+    $payload = $payload['payload'];
+  }
+
+  return $payload;
 }
 
 function luna_hub_get_json($path) {
@@ -1069,7 +1077,11 @@ function luna_hub_get_json($path) {
   $code = (int) wp_remote_retrieve_response_code($resp);
   if ($code >= 400) return null;
   $body = json_decode(wp_remote_retrieve_body($resp), true);
-  return is_array($body) ? $body : null;
+  if (!is_array($body)) {
+    return null;
+  }
+
+  return luna_hub_normalize_payload($body);
 }
 
 function luna_hub_profile() {
@@ -1081,7 +1093,7 @@ function luna_hub_profile() {
   $map = isset($GLOBALS['LUNA_HUB_ENDPOINTS']) ? $GLOBALS['LUNA_HUB_ENDPOINTS'] : array();
   $profile = luna_hub_get_json(isset($map['profile']) ? $map['profile'] : '/wp-json/vl-hub/v1/profile');
   if (is_array($profile)) {
-    $profile = luna_widget_normalize_hub_payload($profile);
+    $profile = luna_hub_normalize_payload($profile);
   }
 
   if (!$profile) {
@@ -1113,7 +1125,7 @@ function luna_hub_fetch_first_json($paths) {
   foreach ($paths as $path) {
     $payload = luna_hub_get_json($path);
     if (is_array($payload)) {
-      $normalized = luna_widget_normalize_hub_payload($payload);
+      $normalized = luna_hub_normalize_payload($payload);
       if (is_array($normalized) && !empty($normalized)) {
         return $normalized;
       }
@@ -1486,7 +1498,7 @@ function luna_profile_facts_comprehensive() {
   
   $comprehensive = json_decode(wp_remote_retrieve_body($response), true);
   if (is_array($comprehensive)) {
-    $comprehensive = luna_widget_normalize_hub_payload($comprehensive);
+    $comprehensive = luna_hub_normalize_payload($comprehensive);
   }
 
   if (!is_array($comprehensive)) {
@@ -4741,7 +4753,7 @@ function luna_fetch_competitor_data($license = null) {
       $body = wp_remote_retrieve_body($response);
       $profile = json_decode($body, true);
       if (is_array($profile)) {
-        $profile = luna_widget_normalize_hub_payload($profile);
+        $profile = luna_hub_normalize_payload($profile);
       } else {
         $profile = null;
       }
