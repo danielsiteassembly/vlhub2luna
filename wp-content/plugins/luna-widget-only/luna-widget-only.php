@@ -1015,6 +1015,25 @@ function luna_profile_cache_key() {
 function luna_profile_cache_bust($all=false){
   // Single-site cache key; $all kept for API symmetry
   delete_transient( luna_profile_cache_key() );
+  if ($all) {
+    delete_transient( luna_hub_collections_cache_key() );
+  }
+}
+
+function luna_hub_normalize_payload($payload) {
+  if (!is_array($payload)) {
+    return $payload;
+  }
+
+  if (isset($payload['data']) && is_array($payload['data'])) {
+    $payload = $payload['data'];
+  } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
+    $payload = $payload['profile'];
+  } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
+    $payload = $payload['payload'];
+  }
+
+  return $payload;
 }
 
 function luna_hub_normalize_payload($payload) {
@@ -1073,6 +1092,9 @@ function luna_hub_profile() {
 
   $map = isset($GLOBALS['LUNA_HUB_ENDPOINTS']) ? $GLOBALS['LUNA_HUB_ENDPOINTS'] : array();
   $profile = luna_hub_get_json(isset($map['profile']) ? $map['profile'] : '/wp-json/vl-hub/v1/profile');
+  if (is_array($profile)) {
+    $profile = luna_hub_normalize_payload($profile);
+  }
 
   if (!$profile) {
     // Fallback to local data only if Hub profile is not available
@@ -1087,6 +1109,116 @@ function luna_hub_profile() {
 
   set_transient($key, $profile, LUNA_CACHE_PROFILE_TTL);
   return $profile;
+}
+
+function luna_hub_collections_cache_key() {
+  $license = luna_get_license();
+  $hub     = luna_widget_hub_base();
+  return 'luna_hub_collections_' . md5($license . '|' . $hub);
+}
+
+function luna_hub_fetch_first_json($paths) {
+  if (!is_array($paths)) {
+    $paths = array($paths);
+  }
+
+  foreach ($paths as $path) {
+    $payload = luna_hub_get_json($path);
+    if (is_array($payload)) {
+      $normalized = luna_hub_normalize_payload($payload);
+      if (is_array($normalized) && !empty($normalized)) {
+        return $normalized;
+      }
+    }
+  }
+
+  return null;
+}
+
+function luna_hub_collect_collections($force_refresh = false, $prefetched = array()) {
+  $license = luna_get_license();
+  if ($license === '') {
+    return array();
+  }
+
+  $key = luna_hub_collections_cache_key();
+  if (!$force_refresh) {
+    $cached = get_transient($key);
+    if (is_array($cached)) {
+      if (is_array($prefetched) && !empty($prefetched)) {
+        $updated = false;
+        foreach ($prefetched as $pref_key => $pref_value) {
+          if (is_array($pref_value) && !empty($pref_value) && (!isset($cached[$pref_key]) || $cached[$pref_key] !== $pref_value)) {
+            $cached[$pref_key] = $pref_value;
+            $updated = true;
+          }
+        }
+        if ($updated) {
+          if (!isset($cached['_meta']) || !is_array($cached['_meta'])) {
+            $cached['_meta'] = array();
+          }
+          $cached['_meta']['retrieved_at'] = gmdate('c');
+          $cached['_meta']['categories'] = isset($cached['_meta']['categories']) ? $cached['_meta']['categories'] : array_keys(array_diff_key($cached, array('_meta' => true)));
+          set_transient($key, $cached, LUNA_CACHE_PROFILE_TTL);
+        }
+      }
+      return $cached;
+    }
+  }
+
+  $categories = array(
+    'profile'      => array('/wp-json/vl-hub/v1/profile', '/wp-json/luna_widget/v1/system/comprehensive'),
+    'connections'  => array('/wp-json/vl-hub/v1/connections', '/wp-json/vl-hub/v1/all-connections', '/wp-json/vl-hub/v1/data-sources'),
+    'cloudops'     => array('/wp-json/vl-hub/v1/cloudops', '/wp-json/vl-hub/v1/cloud-ops'),
+    'content'      => array('/wp-json/vl-hub/v1/content'),
+    'search'       => array('/wp-json/vl-hub/v1/search', '/wp-json/vl-hub/v1/search-console'),
+    'analytics'    => array('/wp-json/vl-hub/v1/analytics', '/wp-json/vl-hub/v1/ga4'),
+    'marketing'    => array('/wp-json/vl-hub/v1/marketing'),
+    'ecommerce'    => array('/wp-json/vl-hub/v1/ecommerce', '/wp-json/vl-hub/v1/e-commerce'),
+    'security'     => array('/wp-json/vl-hub/v1/security'),
+    'web_infra'    => array('/wp-json/vl-hub/v1/web-infra', '/wp-json/vl-hub/v1/web-infrastructure', '/wp-json/vl-hub/v1/infra'),
+    'identity'     => array('/wp-json/vl-hub/v1/identity'),
+    'competitive'  => array('/wp-json/vl-hub/v1/competitive', '/wp-json/vl-hub/v1/competition', '/wp-json/vl-hub/v1/competitors'),
+    'users'        => array('/wp-json/vl-hub/v1/users'),
+    'plugins'      => array('/wp-json/vl-hub/v1/plugins'),
+    'themes'       => array('/wp-json/vl-hub/v1/themes'),
+    'updates'      => array('/wp-json/vl-hub/v1/updates'),
+  );
+
+  $collections = array();
+
+  if (is_array($prefetched) && !empty($prefetched)) {
+    foreach ($prefetched as $pref_key => $pref_value) {
+      if (is_array($pref_value) && !empty($pref_value)) {
+        $collections[$pref_key] = $pref_value;
+      }
+    }
+  }
+
+  foreach ($categories as $name => $paths) {
+    if (isset($collections[$name]) && is_array($collections[$name])) {
+      continue;
+    }
+    $data = luna_hub_fetch_first_json($paths);
+    if ($data !== null) {
+      $collections[$name] = $data;
+    }
+  }
+
+  $streams = luna_fetch_hub_data_streams($license);
+  if (is_array($streams) && !empty($streams)) {
+    $collections['data_streams'] = $streams;
+  }
+
+  $collections['_meta'] = array(
+    'retrieved_at' => gmdate('c'),
+    'license'      => $license,
+    'categories'   => array_keys(array_diff_key($collections, array('_meta' => true))),
+  );
+
+  set_transient($key, $collections, LUNA_CACHE_PROFILE_TTL);
+
+  return $collections;
 }
 
 /* Helpers to normalize Hub data and provide local fallbacks */
@@ -1375,9 +1507,11 @@ function luna_profile_facts_comprehensive() {
     $fallback['__source'] = 'fallback-basic';
     return $fallback; // fallback
   }
-  
+
+  $hub_collections = luna_hub_collect_collections(false, array('profile' => $comprehensive));
+
   error_log('[Luna] Successfully fetched comprehensive data: ' . print_r($comprehensive, true));
-  
+
   // Build enhanced facts from comprehensive data with local fallbacks
   $local_snapshot = luna_snapshot_system();
 
@@ -1589,6 +1723,40 @@ function luna_profile_facts_comprehensive() {
     error_log('[Luna] GA4 metrics hydrated: ' . print_r($facts['ga4_metrics'], true));
   } else {
     error_log('[Luna] Unable to hydrate GA4 metrics from Hub.');
+  }
+
+  if (!empty($hub_collections)) {
+    $facts['hub_collections'] = $hub_collections;
+
+    $collection_map = array(
+      'profile'      => 'hub_profile',
+      'connections'  => 'hub_connections',
+      'cloudops'     => 'hub_cloudops',
+      'content'      => 'hub_content',
+      'search'       => 'hub_search',
+      'analytics'    => 'hub_analytics',
+      'marketing'    => 'hub_marketing',
+      'ecommerce'    => 'hub_ecommerce',
+      'security'     => 'hub_security',
+      'web_infra'    => 'hub_web_infra',
+      'identity'     => 'hub_identity',
+      'competitive'  => 'hub_competitive',
+      'data_streams' => 'hub_data_streams',
+      'users'        => 'hub_users',
+      'plugins'      => 'hub_plugins',
+      'themes'       => 'hub_themes',
+      'updates'      => 'hub_updates',
+    );
+
+    foreach ($collection_map as $source_key => $dest_key) {
+      if (isset($hub_collections[$source_key])) {
+        $facts[$dest_key] = $hub_collections[$source_key];
+      }
+    }
+
+    $facts['hub_sources_loaded'] = isset($hub_collections['_meta']['categories'])
+      ? $hub_collections['_meta']['categories']
+      : array_keys(array_diff_key($hub_collections, array('_meta' => true)));
   }
 
   // Fetch competitor analysis data - first try from comprehensive profile
