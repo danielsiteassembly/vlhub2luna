@@ -1020,22 +1020,36 @@ function luna_profile_cache_bust($all=false){
   }
 }
 
-if (!function_exists('luna_hub_normalize_payload')) {
-  function luna_hub_normalize_payload($payload) {
-    if (!is_array($payload)) {
-      return $payload;
-    }
-
-    if (isset($payload['data']) && is_array($payload['data'])) {
-      $payload = $payload['data'];
-    } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
-      $payload = $payload['profile'];
-    } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
-      $payload = $payload['payload'];
-    }
-
+function luna_hub_normalize_payload($payload) {
+  if (!is_array($payload)) {
     return $payload;
   }
+
+  if (isset($payload['data']) && is_array($payload['data'])) {
+    $payload = $payload['data'];
+  } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
+    $payload = $payload['profile'];
+  } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
+    $payload = $payload['payload'];
+  }
+
+  return $payload;
+}
+
+function luna_hub_normalize_payload($payload) {
+  if (!is_array($payload)) {
+    return $payload;
+  }
+
+  if (isset($payload['data']) && is_array($payload['data'])) {
+    $payload = $payload['data'];
+  } elseif (isset($payload['profile']) && is_array($payload['profile'])) {
+    $payload = $payload['profile'];
+  } elseif (isset($payload['payload']) && is_array($payload['payload'])) {
+    $payload = $payload['payload'];
+  }
+
+  return $payload;
 }
 
 function luna_hub_get_json($path) {
@@ -1063,7 +1077,11 @@ function luna_hub_get_json($path) {
   $code = (int) wp_remote_retrieve_response_code($resp);
   if ($code >= 400) return null;
   $body = json_decode(wp_remote_retrieve_body($resp), true);
-  return is_array($body) ? $body : null;
+  if (!is_array($body)) {
+    return null;
+  }
+
+  return luna_hub_normalize_payload($body);
 }
 
 function luna_hub_profile() {
